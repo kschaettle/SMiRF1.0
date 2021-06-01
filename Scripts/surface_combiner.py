@@ -23,7 +23,7 @@ for inname in innames:
     outheader.append(inname.split('_pointshal.csv')[0])
     outsplit = [outsplit[x] + [splitlines[x][-1]] for x in range(len(splitlines))]
 
-outfile = open('zzzevaluated_lines_Prevalences_HAL.csv', 'w')
+outfile = open('combined_HAL_points.csv', 'w')
 outfile.write(','.join(outheader) + '\n')
 for entry in outsplit:
     outfile.write(','.join(entry) + '\n')
