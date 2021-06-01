@@ -71,4 +71,4 @@ prediction <- predict(rf, X_test)
 
 outmat = cbind(all_data[test_rows, 1:2], prediction, Y_test)
 
-write.csv(data.frame(outmat), file='zzziRF_residuals_Prevalences.csv')
+write.csv(data.frame(outmat), file='iRF_residuals.csv')
