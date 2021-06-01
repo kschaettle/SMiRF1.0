@@ -662,7 +662,7 @@ print(len(column_names_signed))
 print(beta_hat)
 sort_print(beta_hat, column_names_signed, 'linear_ROSM.dat')
 signed_residuals = get_colvec(signed_residuals)
-array_print(np.concatenate((test_positions ,signed_residuals), axis=1), 'Linear_important.txt')
+array_print(np.concatenate((test_positions ,signed_residuals), axis=1), 'Linear_residuals.txt')
 print('Above: linear regression over interactions')
 
 
@@ -691,7 +691,7 @@ sort_print(clf2.coef_, column_names_signed, 'Lasso_ROSM_{0}.dat'.format(alpha_va
 print('Above: Lasso regression')
 array_print(np.concatenate((test_positions, get_colvec(Y_test - Y_pred2)), axis=1) , 'Lasso_residuals.txt')
 
-q()
+
 #X_signed_train = X_signed_train.tolist()
 #X_signed_train = np.array([line[1:] for line in X_signed_train])   #for removing constant
 #print(X_signed_train.shape)
@@ -716,197 +716,5 @@ result.sort()
 print(result)
 print(len(result))
 
-sort_print(stepwise_model.params.tolist(), result, 'ForwardBackward.txt')
+sort_print(stepwise_model.params.tolist(), result, 'ForwardBackward.dat')
 array_print(np.concatenate((test_positions, get_colvec(residual)), axis=1), 'stepwise_residuals.txt')
-
-
-
-#####################################################################
-#X)percentile should just be X_array
-interaction_mat_dict = {}   #{name:[interaction_mat, inteaction_griddata, interpolant, derivs], ...}; derivs == {name:[graident_met, gradient_griddata, interpolant], ...}
-###temporary: interaction_mat_dict is just {name:[interpolant, derivs],...} where derivs = {name:[interpolant], ...}
-uncertainty_mat_dict = {}   #these dictionaries store the derivatives of the interactions
-
-for x in range(1, X_signed.shape[1]):
-    interaction_name = column_names_signed[x]
-    interaction_mat, interaction_griddata = get_interpolated_mat(interaction_name)   #needs to return scipy griddata object for this feature as well as matrix
-    np.random.shuffle(interaction_griddata)    #just for speed testing
-
-    print(np.array(interaction_mat).shape)   # test
-
-    interaction_name_split = [''.join(''.join(entry.split('-')).split('+')) for entry in interaction_name.split('_')]  #take out sign
-    colnames = interaction_name_split      #names of columns that belong in interaction
-    colnames = [''.join( ''.join(subentry.split('-')).split('+')) for subentry in colnames]
-    print(colnames)
-    col_indices = [column_titles.index(entry) for entry in colnames]    #col indices
-
-    #Now we will compute and organize the derivative matrices...
-    submatrix = X_array[:, col_indices]
-    total_dims = len(interaction_name_split)
-    max_corner = np.max(interaction_griddata[:, :total_dims], axis=0)
-    min_corner = np.min(interaction_griddata[:, :total_dims], axis=0)
-    corner_delta = max_corner - min_corner    #extremal corners
-    char_len = interaction_mat.shape[0]
-    grid_delta   = corner_delta/(char_len-1)             #distance between grids in each dimens
-
-    linspaces = [np.linspace(min_corner[dim_iter], max_corner[dim_iter], char_len) for dim_iter in range(total_dims)]
-    interaction_interpolant = RGI(tuple(linspaces), interaction_mat, method='linear', fill_value=float(np.average(interaction_mat)), bounds_error=False)
-    
-    interaction_mat_dict[interaction_name] = [interaction_interpolant, {}]
-    X_signed[:,x] = interaction_interpolant(submatrix)   #points at which to evaluate
-
-    gradient_mat_array = np.gradient(interaction_mat)
-    gradient_mat_array = [np.array(entry) for entry in gradient_mat_array]  #list of 1D gradients
-    print([entry.shape for entry in gradient_mat_array])
-
-    for y in range(len(colnames)):
-        #need to create an interpolant for each feature
-        colname = colnames[y]      #name and index
-        gradient_griddata = copy.deepcopy(interaction_griddata)
-        for coord_iter in range(len(gradient_griddata)):
-            coords = tuple(np.rint((interaction_griddata[coord_iter, :total_dims] - min_corner)/grid_delta).astype(np.int).tolist())
-            gradient_griddata[x, -1] = gradient_mat_array[y][coords]
-        np.random.shuffle(gradient_griddata)
-        charlen = gradient_mat_array[y].shape[0]   #shape
-        gradient_linspaces = [np.linspace(min_corner[dim_iter], max_corner[dim_iter], char_len) for dim_iter in range(total_dims)]
-        gradient_interpolant = RGI(tuple(gradient_linspaces), gradient_mat_array[y], method='linear', fill_value=float(np.average(gradient_mat_array[y])), bounds_error=False)
-        interaction_mat_dict[interaction_name][-1][colname] = [gradient_interpolant]   #[gradient_mat_array[y], gradient_griddata, gradient_interpolant]   #set up the structure first... use scipy griddata to evaluate
-
-
-#use variance mats
-
-X_percentile = X_array
-beta_hat = fb_beta_hat
-beta_hat_squared = (np.array(beta_hat)**2).tolist()
-tolerance = 0.00000000000000001     #hill climbing tolerance...
-integrating_factor = 100000    #another hyperparameter for the inner gradient loop; optimizing ROI analogue
-current_delta = tolerance * 10000
-old_ROI = 0.0
-portfolio_lambda = 0    #lambda for effective utility function
-new_X_percentile = X_percentile.tolist()
-new_X_percentile = np.array(new_X_percentile)
-dumpout(new_X_percentile, 'orig_values.csv')
-
-
-unadjustables = [0, 1]    #columns to not change; alternatively only optimization columns will be changed
-old_model_eval = np.dot(X_signed, beta_hat)   #clf.predict(X_signed)    #this is f(v0)
-print(np.mean(old_model_eval))
-prices = [1/X_signed.shape[0] for entry in column_titles]  #this will have to be adjusted... price per unit per area will be important. just use 1 as price "per unit" for now
-#for entry in unadjustables:
-#    prices[entry] = 1
-
-
-###prices must be in standardized units, for example $/lb
-###Use hard-coded column ids for now
-#prices[3] = 30/X_signed.shape[0]  * (np.max(X_array[3]) - np.min(X_array[3])) * 0.00001
-prices[5] = 318/X_signed.shape[0] * (np.max(X_array[4]) - np.min(X_array[4])) * 0.00001
-prices[4] = 425/X_signed.shape[0] * (np.max(X_array[5]) - np.min(X_array[5])) * 0.00001
-optimization_columns = [4,5]
-
-###This section is for setting near global optimum phosphorus and potassium; should make optimization faster
-new_X_percentile = new_X_percentile.tolist()
-new_X_percentile = [entry[:4] +[25, 68] + entry[6:] for entry in new_X_percentile]    #25, 68
-new_X_percentile = np.array(new_X_percentile)
-for x in optimization_columns:
-    new_X_percentile[:, x] = new_X_percentile[:,x] * 1.001
-#Lime, Potash, TSP
-
-mins = np.min(X_array, axis=0)
-maxs = np.max(X_array, axis=0)
-min_array = np.array([mins.tolist() for x in range(X_array.shape[0])])
-max_array = np.array([maxs.tolist() for x in range(X_array.shape[0])])
-
-
-deltas = maxs-mins
-new_lower_bounds = min_array
-new_upper_bounds = max_array
-
-
-loop_counter = 0
-orig_model_eval = old_model_eval
-want_fast_gradient = True
-want_decaying_if = True
-new_X_percentile = np.minimum(new_X_percentile, new_upper_bounds)
-while current_delta > tolerance and loop_counter < 30000:
-
-    loop_counter += 1
-    partial_derivs = [get_overall_derivative(beta_hat, entry, column_titles, interaction_mat_dict, new_X_percentile, column_names_signed)
-                     for entry in column_titles]   #derivative for each adjustable variable... might need to change which columns to use
-    
-
-    response_vector = evaluate_response(interaction_lines, new_X_percentile, Y_vec, column_names_signed, interaction_mat_dict, column_titles)    #USING SCIPY
-    new_model_eval = np.dot(response_vector, beta_hat)  #This is f(v+v0)
-
-    print('Current yield: '+str(np.mean(new_model_eval))+' Orig.: '+str(np.mean(orig_model_eval)))
-    model_delta = new_model_eval - old_model_eval  #this is mean f(v0+v) - f(v0)
-    price_change = np.sum(np.dot((new_X_percentile), np.array(prices)))   #total price of new treatment; new_X_percentile or new_X_percentile - X_percentile
-    print(price_change)
-    pc_100000 = price_change
-
-    if not want_fast_gradient or loop_counter < 2:
-        gradient = [0 for x in range(len(partial_derivs))]
-        for x in optimization_columns:   #these are the ONLY ones we change
-            if not want_yieldpenalty or np.mean(new_model_eval) > yield_setpoint:
-         #prevent model from getting stuck at very low changes in yield; yield_setpoint should be slightly greater than original yield for proper performance
-                gradient[x] = (partial_derivs[x]*(pc_100000) - model_delta*prices[x])/((pc_100000)**2+0.0000001) 
-            else:
-                gradient[x] = partial_derivs[x]*1/(abs(price_change)+0.00000001)   #just use the yield itself as the target funciton in this case... make sure derivatives are scaled accordingly
-
-
-        for x in range(len(gradient)):
-            if not x in optimization_columns:
-                gradient[x] = np.zeros(gradient[optimization_columns[0]].shape)   #not all columns will be adjusted.
-
-        gradient = np.array([entry.tolist() for entry in gradient])
-        gradient = np.transpose(gradient)    #transposition 
-        gradient = gradient * 0.01 #just for the first iteration...
-        if float(np.sum(np.abs(gradient))) == 0:   #only if gradient is all zeros
-            for x in optimization_columns:
-                gradient[:,x] = np.ones(gradient[:,x].shape) * 10**-10
-
-        old_objective_function = np.average(model_delta/(price_change + 0.00000000001))
-        old_objective_function = np.reshape(new_model_eval, (new_model_eval.size, 1))
-        old_objective_function = np.repeat(old_objective_function, new_X_percentile.shape[-1], axis=1)
-
-###############################################Base gradient on locally linear approximation
-    ###Objective function should be (yield-orig yield)/(total price)
-    if want_fast_gradient and loop_counter > 1:
-        feature_delta = new_X_percentile - old_X_percentile
-        gradient = np.zeros(new_X_percentile.shape)
-
-        new_objective_function = np.reshape(new_model_eval, (new_model_eval.size, 1))
-        new_objective_function = np.repeat(new_objective_function, new_X_percentile.shape[-1], axis=1)
-        newgrad = (new_objective_function-old_objective_function)/(feature_delta + 0.01)
-        for x in optimization_columns:
-            gradient[:,x] = newgrad[:,x]   
-        old_objective_function = new_objective_function
-################################################################3
-
-
-    current_delta = np.mean(np.abs(gradient))
-
-    dumpout(new_X_percentile)
-
-    old_X_percentile = new_X_percentile
-    #update the observations using the newly computed gradient
-    temp_integrating_factor = integrating_factor
-    if want_decaying_if:
-        temp_integrating_factor = 0.5/float(np.average(np.abs(gradient[:, optimization_columns]))) * 2**(-1*loop_counter/100)
-    new_X_percentile = new_X_percentile + temp_integrating_factor*gradient
-    #    new_X_percentile = np.maximum(new_X_percentile, X_percentile)  #positive prescription
-    new_X_percentile = np.minimum(new_X_percentile, new_upper_bounds)
-    new_X_percentile = np.maximum(new_X_percentile, new_lower_bounds)  #upper and lower bounds
-    ROI = np.mean(model_delta)/(price_change+0.00000000001)
-    current_delta = abs(ROI - old_ROI)
-    old_ROI = ROI
-
-#    new_X_percentile = apply_physical_equations(new_X_percentile, X_percentile)
-
-    print('ROI: ' + str(ROI))
-    print('Avg. of gradient: ' + str(np.average(np.abs(gradient[:, optimization_columns]), axis=0) ))
-    print('Total price: ' + str(price_change/model_delta.shape[0]))
-    print('Objective function: ' + str(np.average(old_objective_function)))
-    print('Average Phosphorus: ' + str(np.average(new_X_percentile[:,4])  ))
-    print('Average Potassium : ' + str(np.average(new_X_percentile[:,5])  ))
-    print()
-    old_model_eval = new_model_eval
